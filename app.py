@@ -25,7 +25,39 @@ warnings.filterwarnings('ignore')
 
 
 class DiseaseAnalysisApp:
+    """
+    DiseaseAnalysisApp
+
+    Main application class for the Epidemic Pattern Analyzer Streamlit app.
+
+    Responsibilities:
+    - Load historical disease incidence tables into `self.all_data` (dict of pandas.DataFrame).
+    - Preprocess the tables into numeric feature vectors (`self.features`, shape: (n_samples, 12)).
+    - Train machine learning models stored in `self.models` for disease pattern recognition.
+    - Provide SIR-model simulation utilities and a Streamlit dashboard for interactive analysis.
+
+    Key attributes (populated during runtime):
+    - all_data: dict[str, pandas.DataFrame]
+    - features: numpy.ndarray, shape (n_samples, 12)
+    - features_scaled: numpy.ndarray, same shape as `features` (scaled)
+    - labels: list[str], length n_samples
+    - encoded_labels: numpy.ndarray, shape (n_samples,)
+    - models: dict[str, dict] mapping model key to {'model': estimator, 'score': float, ...}
+    - scaler: sklearn.preprocessing.StandardScaler
+    - label_encoder: sklearn.preprocessing.LabelEncoder
+    """
+
     def __init__(self):
+        """
+        Initialize basic containers and defaults for the application.
+
+        Inputs:
+        - None
+
+        Outputs / side-effects:
+        - Initializes the attributes `all_data`, `models`, `scaler`, `label_encoder`, and `disease_info`.
+        - Calls `self.setup_page()` to configure Streamlit layout.
+        """
         self.all_data = {}
         self.models = {}
         self.scaler = StandardScaler()
@@ -50,6 +82,15 @@ class DiseaseAnalysisApp:
         self.setup_page()
 
     def setup_page(self):
+        """
+        Configure the Streamlit page and render the app title and description.
+
+        Inputs:
+        - None
+
+        Outputs:
+        - None (side-effect: configures Streamlit and writes header UI elements).
+        """
         st.set_page_config(
             page_title="Epidemic Pattern Analyzer",
             page_icon="🦠",
@@ -62,6 +103,16 @@ class DiseaseAnalysisApp:
             "Analyze epidemic patterns using AI and SIR models. Enter epidemic parameters and get similarity analysis with real diseases.")
 
     def load_all_data(self):
+        """
+        Read Excel files from the `data/` directory into `self.all_data`.
+
+        Inputs:
+        - None (relies on files present under `data/` with predefined filenames).
+
+        Outputs:
+        - Returns True if at least one disease file was successfully loaded; False otherwise.
+        - Side-effect: populates `self.all_data` with {disease_name: pandas.DataFrame}.
+        """
         try:
             data_files = {
                 'Pertussis': 'Pertussis_reported_cases_and_incidence_2025_18_11_13_34_UTC_1.xlsx',
@@ -105,6 +156,15 @@ class DiseaseAnalysisApp:
             return False
 
     def clean_numeric_value(self, value):
+        """
+        Convert various cell representations into a safe float.
+
+        Inputs:
+        - value: scalar (int, float, str or NaN). Strings may include commas, spaces, or '<'.
+
+        Outputs:
+        - float: cleaned numeric value. Returns 0.0 for missing/invalid inputs.
+        """
         if pd.isna(value):
             return 0.0
         if isinstance(value, (int, float)):
@@ -115,12 +175,25 @@ class DiseaseAnalysisApp:
                 return 0.0
             try:
                 return float(cleaned)
-            except:
+            except (ValueError, TypeError):
                 return 0.0
         return 0.0
 
     def extract_advanced_features(self, cases):
-        """Extract advanced features from case data with better statistical properties"""
+        """
+        Convert a short time series of case counts into a fixed-length numeric
+        descriptor vector suitable for machine learning.
+
+        Inputs:
+        - cases: iterable of numeric values (list or 1-D numpy array); typical
+          length is 4-6 but any length >=0 is handled. Values are counts (floats).
+
+        Outputs:
+        - numpy.ndarray, shape (12,), dtype=float. Contains summary statistics
+          (mean, std, min, max, median), linear trend (slope), percent-change
+          statistics, distribution shape metrics and non-zero ratio. If input is
+          empty or extraction fails, returns zeros vector of length 12.
+        """
         if len(cases) == 0:
             return np.zeros(12)
 
@@ -163,8 +236,8 @@ class DiseaseAnalysisApp:
                 # Distribution shape
                 features.extend([
                     (np.max(cases) - np.min(cases)) / (np.mean(cases) + 1e-8) if np.mean(cases) > 0 else 0.0,
-                    # Coefficient of variation
-                    len(cases_clean) / len(cases) if len(cases) > 0 else 0.0,  # Non-zero ratio
+                    # Non-zero ratio
+                    len(cases_clean) / len(cases) if len(cases) > 0 else 0.0,
                 ])
             else:
                 features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
@@ -173,13 +246,27 @@ class DiseaseAnalysisApp:
             while len(features) < 12:
                 features.append(0.0)
 
-        except Exception as e:
+        except Exception:
             # Return zeros if feature extraction fails
             return np.zeros(12)
 
         return np.array(features[:12], dtype=float)
 
     def preprocess_data(self):
+        """
+        Build model-ready feature matrices and label arrays from `self.all_data`.
+
+        Inputs:
+        - None (reads from `self.all_data`).
+
+        Outputs:
+        - Returns True on success, False on failure. Side-effects:
+          - `self.features`: numpy.ndarray shape (n_samples, 12)
+          - `self.labels`: list[str] length n_samples
+          - `self.countries`: list[str] length n_samples
+          - `self.encoded_labels`: numpy.ndarray shape (n_samples,)
+          - `self.features_scaled`: numpy.ndarray shape (n_samples, 12)
+        """
         try:
             features = []
             labels = []
@@ -210,7 +297,7 @@ class DiseaseAnalysisApp:
                     try:
                         if col_str.isdigit() and 2018 <= int(col_str) <= 2023:
                             year_columns.append(col)
-                    except:
+                    except Exception:
                         continue
 
                 # If not enough recent years, expand range
@@ -222,13 +309,13 @@ class DiseaseAnalysisApp:
                         try:
                             if col_str.isdigit() and 2015 <= int(col_str) <= 2024:
                                 year_columns.append(col)
-                        except:
+                        except Exception:
                             continue
 
                 # Sort by year (newest first) and take 4-6 years
                 try:
                     year_columns = sorted(year_columns, key=lambda x: int(x), reverse=True)[:6]
-                except:
+                except Exception:
                     year_columns = sorted(year_columns, reverse=True)[:6]
 
                 if len(year_columns) < 2:
@@ -312,6 +399,16 @@ class DiseaseAnalysisApp:
             return False
 
     def train_models(self):
+        """
+        Train a set of ML classifiers on `self.features_scaled` and `self.encoded_labels`.
+
+        Inputs:
+        - None (expects `self.features_scaled` and `self.encoded_labels` are available).
+
+        Outputs:
+        - Returns True if at least some models were trained successfully, False otherwise.
+        - Side-effect: populates `self.models` with trained estimators and performance metrics.
+        """
         try:
             st.info("Training optimized models...")
 
@@ -495,6 +592,19 @@ class DiseaseAnalysisApp:
             return False
 
     def sir_model(self, y, t, N, beta, gamma):
+        """
+        ODEs for the SIR epidemiological model.
+
+        Inputs:
+        - y: iterable of three floats (S, I, R) representing compartment counts.
+        - t: float time (required by `odeint`, not used in equations directly).
+        - N: float/int total population size.
+        - beta: float, infection rate.
+        - gamma: float, recovery rate.
+
+        Outputs:
+        - tuple of floats (dSdt, dIdt, dRdt) time derivatives.
+        """
         S, I, R = y
         dSdt = -beta * S * I / N
         dIdt = beta * S * I / N - gamma * I
@@ -502,6 +612,21 @@ class DiseaseAnalysisApp:
         return dSdt, dIdt, dRdt
 
     def generate_sir_curve(self, N, S0, I0, R0, beta, gamma, days=365):
+        """
+        Simulate the SIR model over a number of days and return compartment
+        trajectories.
+
+        Inputs:
+        - N: int/float, total population.
+        - S0, I0, R0: initial counts (ints/floats) for Susceptible, Infected, Recovered.
+        - beta: float infection rate.
+        - gamma: float recovery rate.
+        - days: int, number of days to simulate. Output arrays have length `days`.
+
+        Outputs:
+        - t: numpy.ndarray shape (days,), time points.
+        - S, I, R: numpy.ndarray each shape (days,), compartment counts over time.
+        """
         y0 = S0, I0, R0
         t = np.linspace(0, days, days)
         result = odeint(self.sir_model, y0, t, args=(N, beta, gamma))
@@ -509,11 +634,37 @@ class DiseaseAnalysisApp:
         return t, S, I, R
 
     def calculate_r0(self, beta, gamma):
+        """
+        Compute the basic reproduction number R0 = beta / gamma.
+
+        Inputs:
+        - beta: float infection rate.
+        - gamma: float recovery rate.
+
+        Outputs:
+        - float: R0; `float('inf')` if gamma is zero to avoid division by zero.
+        """
         if gamma == 0:
             return float('inf')
         return beta / gamma
 
     def analyze_pattern(self, beta, gamma, S0, I0, R0, N, selected_model='rf'):
+        """
+        Generate an SIR curve and use a trained ML model to predict which
+        historical diseases the simulated curve most closely matches.
+
+        Inputs:
+        - beta, gamma: floats for SIR parameters.
+        - S0, I0, R0: initial counts (ints/floats).
+        - N: int/float total population.
+        - selected_model: str key to select a trained model in `self.models`.
+
+        Outputs:
+        - t, S, I, R: numpy.ndarrays for time and compartments (shape: (days,)).
+        - results_df: pandas.DataFrame sorted by confidence with columns ['Disease','Probability','R0_Match','Combined_Score','R0_Range','Description'].
+        - sir_cases: numpy.ndarray of sampled infected counts used for prediction (typically <=8 entries).
+        If models are not available, returns (None, None, None, None, empty DataFrame, empty ndarray).
+        """
         if not self.models:
             st.error("Models not trained!")
             return None, None, None, None, pd.DataFrame(), np.array([])
@@ -582,6 +733,18 @@ class DiseaseAnalysisApp:
         return t, S, I, R, results_df, sir_cases
 
     def find_similar_countries(self, sir_cases, top_n=5):
+        """
+        Compare features extracted from `sir_cases` to historical country samples
+        and return the top-N most similar entries.
+
+        Inputs:
+        - sir_cases: iterable of numeric infected counts sampled from a simulated curve.
+        - top_n: int, number of top matches to return.
+
+        Outputs:
+        - pandas.DataFrame with columns ['Country','Disease','Similarity'] where
+          'Similarity' is a percentage (0-100). Returns empty DataFrame if no historical features exist.
+        """
         similarities = []
 
         if not hasattr(self, 'features_scaled') or len(self.features_scaled) == 0:
